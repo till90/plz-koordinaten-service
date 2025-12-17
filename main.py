@@ -11,7 +11,7 @@ app = Flask(__name__)
 PLZ_RE = re.compile(r"^\d{5}$")
 
 # Wichtig: identifizierbarer User-Agent (und idealerweise Kontakt)
-UA = os.getenv("NOMINATIM_USER_AGENT", "plz-koordinaten-demo (contact: you@example.com)")
+UA = os.getenv("NOMINATIM_USER_AGENT", "plz-koordinaten-demo (contact: info@data-tales.dev)")
 geolocator = Nominatim(user_agent=UA, timeout=10)
 
 @lru_cache(maxsize=2048)
