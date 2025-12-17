@@ -10,7 +10,17 @@ from typing import Optional, Tuple
 from flask import Flask, jsonify, render_template_string, request
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderServiceError, GeocoderTimedOut, GeocoderUnavailable
+from pyproj import Proj, transform, exceptions
 
+# ---------------------------------------------------------
+# Coordinate Systems (edit here)
+# ---------------------------------------------------------
+COORDINATE_SYSTEMS = {
+    "latlon": {"name": "Lat/Lon (WGS84)", "epsg": "EPSG:4326"},
+    "utm32": {"name": "UTM Zone 32N (ETRS89)", "epsg": "EPSG:25832"},
+    "utm33": {"name": "UTM Zone 33N (ETRS89)", "epsg": "EPSG:25833"},
+    "gk4": {"name": "Gauß-Krüger Zone 4", "epsg": "EPSG:31468"},
+}
 
 # ---------------------------------------------------------
 # Service Meta / Navigation (edit here)
@@ -100,6 +110,22 @@ def lookup_coordinates_for_plz(plz: str) -> Optional[Tuple[float, float]]:
     except Exception:
         app.logger.exception("Unexpected error during geocoding")
         raise RuntimeError("Unerwarteter Fehler beim Geocoding. Bitte später erneut versuchen.")
+
+
+def transform_coordinates(
+    latitude: float, longitude: float, target_epsg: str
+) -> Tuple[float, float]:
+    """
+    Transforms coordinates from WGS84 to the target EPSG.
+    Raises ValueError on issues.
+    """
+    try:
+        in_proj = Proj("EPSG:4326")  # WGS84
+        out_proj = Proj(target_epsg)
+        x, y = transform(in_proj, out_proj, longitude, latitude, always_xy=True)
+        return x, y
+    except exceptions.ProjError as e:
+        raise ValueError(f"Fehler bei der Koordinatentransformation: {e}")
 
 
 def build_nav_items(current_base_url: str):
@@ -309,6 +335,22 @@ HTML_TEMPLATE = r"""<!doctype html>
   .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;}
   .hint{font-size:12px; color:var(--muted); margin-top:10px}
   .card.error{border-color: rgba(255,255,255,.18)}
+
+  .site-footer-notice {
+    margin-top: 28px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--muted);
+    text-align: center;
+  }
+  .site-footer-notice a {
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .site-footer-notice a:hover {
+    color: var(--text);
+  }
   </style>
 </head>
 
@@ -365,6 +407,14 @@ HTML_TEMPLATE = r"""<!doctype html>
               />
               <div class="hint" id="plzHelp">Erlaubt sind genau 5 Ziffern. API: <span class="mono">/api?plz=64283</span></div>
             </div>
+             <div class="search">
+                 <label class="sr-only" for="coordsys">Koordinatensystem</label>
+                 <select id="coordsys" name="coordsys" class="search input">
+                     {% for key, value in coordinate_systems.items() %}
+                         <option value="{{ key }}" {% if key == selected_coordsys %}selected{% endif %}>{{ value.name }}</option>
+                     {% endfor %}
+                 </select>
+             </div>
             <button class="btn btn-primary" type="submit">Koordinaten holen</button>
           </div>
         </form>
@@ -377,12 +427,17 @@ HTML_TEMPLATE = r"""<!doctype html>
             </div>
           {% elif result %}
             <div class="card">
-              <div class="card-title">Ergebnis</div>
-              <p class="card-desc">Quelle: Nominatim (OpenStreetMap)</p>
-              <div class="kv"><strong>PLZ:</strong> <span class="mono">{{ result.plz }}</span></div>
-              <div class="kv"><strong>Breitengrad:</strong> <span class="mono">{{ "%.6f"|format(result.latitude) }}</span></div>
-              <div class="kv"><strong>Längengrad:</strong> <span class="mono">{{ "%.6f"|format(result.longitude) }}</span></div>
-              <p class="hint">JSON: <a class="mono" href="/api?plz={{ result.plz|urlencode }}">/api?plz={{ result.plz }}</a></p>
+               <div class="card-title">Ergebnis</div>
+               <p class="card-desc">Quelle: Nominatim (OpenStreetMap) • System: {{ result.coordsys_name }}</p>
+               <div class="kv"><strong>PLZ:</strong> <span class="mono">{{ result.plz }}</span></div>
+               {% if result.x and result.y %}
+                   <div class="kv"><strong>X:</strong> <span class="mono">{{ "%.3f"|format(result.x) }}</span></div>
+                   <div class="kv"><strong>Y:</strong> <span class="mono">{{ "%.3f"|format(result.y) }}</span></div>
+               {% else %}
+                   <div class="kv"><strong>Breitengrad:</strong> <span class="mono">{{ "%.6f"|format(result.latitude) }}</span></div>
+                   <div class="kv"><strong>Längengrad:</strong> <span class="mono">{{ "%.6f"|format(result.longitude) }}</span></div>
+               {% endif %}
+               <p class="hint">JSON: <a class="mono" href="/api?plz={{ result.plz|urlencode }}&coordsys={{ selected_coordsys }}">/api?plz={{ result.plz }}&coordsys={{ selected_coordsys }}</a></p>
             </div>
           {% else %}
             <div class="card">
@@ -391,6 +446,13 @@ HTML_TEMPLATE = r"""<!doctype html>
             </div>
           {% endif %}
         </div>
+
+        <footer class="site-footer-notice">
+          <p>
+            Dieser Dienst nutzt Daten von <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>, die unter der <a href="https://opendatacommons.org/licenses/odbl/" target="_blank" rel="noopener">Open Data Commons Open Database Lizenz</a> (ODbL) verfügbar sind.
+            Die Geokodierung erfolgt über <a href="https://nominatim.org/" target="_blank" rel="noopener">Nominatim</a>. Bitte beachten Sie die <a href="https://operations.osmfoundation.org/policies/nominatim/" target="_blank" rel="noopener">Nutzungsrichtlinie</a>.
+          </p>
+        </footer>
       </div>
     </section>
   </main>
@@ -430,6 +492,10 @@ HTML_TEMPLATE = r"""<!doctype html>
 def index():
     plz_raw = request.args.get("plz", "")
     plz = plz_raw.strip() if plz_raw else ""
+    selected_coordsys = request.args.get("coordsys", "latlon")
+    if selected_coordsys not in COORDINATE_SYSTEMS:
+        selected_coordsys = "latlon"
+
     error = None
     result = None
 
@@ -441,7 +507,20 @@ def index():
                 error = f"Keine Koordinaten für PLZ {plz_norm} gefunden."
             else:
                 lat, lon = coords
-                result = {"plz": plz_norm, "latitude": lat, "longitude": lon}
+                result = {
+                    "plz": plz_norm,
+                    "latitude": lat,
+                    "longitude": lon,
+                    "coordsys_name": COORDINATE_SYSTEMS[selected_coordsys]["name"],
+                    "x": None,
+                    "y": None,
+                }
+                if selected_coordsys != "latlon":
+                    epsg = COORDINATE_SYSTEMS[selected_coordsys]["epsg"]
+                    x, y = transform_coordinates(lat, lon, epsg)
+                    result["x"] = x
+                    result["y"] = y
+
         except ValueError as ve:
             error = str(ve)
         except RuntimeError as rexc:
@@ -459,6 +538,8 @@ def index():
         plz=plz,
         error=error,
         result=result,
+        coordinate_systems=COORDINATE_SYSTEMS,
+        selected_coordsys=selected_coordsys,
     )
 
 
@@ -466,6 +547,9 @@ def index():
 def api():
     try:
         plz = normalize_plz(request.args.get("plz", None))
+        selected_coordsys = request.args.get("coordsys", "latlon")
+        if selected_coordsys not in COORDINATE_SYSTEMS:
+            selected_coordsys = "latlon"
     except ValueError as ve:
         return jsonify(ok=False, error=str(ve)), 400
 
@@ -478,7 +562,25 @@ def api():
         return jsonify(ok=False, error=f"Keine Koordinaten für PLZ {plz} gefunden."), 404
 
     lat, lon = coords
-    return jsonify(ok=True, plz=plz, latitude=lat, longitude=lon)
+    response_data = {
+        "ok": True,
+        "plz": plz,
+        "latitude": lat,
+        "longitude": lon,
+        "coordsys": selected_coordsys,
+        "coordsys_name": COORDINATE_SYSTEMS[selected_coordsys]["name"],
+    }
+
+    if selected_coordsys != "latlon":
+        try:
+            epsg = COORDINATE_SYSTEMS[selected_coordsys]["epsg"]
+            x, y = transform_coordinates(lat, lon, epsg)
+            response_data["x"] = x
+            response_data["y"] = y
+        except ValueError as ve:
+            return jsonify(ok=False, error=str(ve)), 400
+
+    return jsonify(response_data)
 
 
 if __name__ == "__main__":
