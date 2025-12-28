@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+API:
+- GET /api?plz=<postleitzahl>&coordsys=<system> -> Gibt die Koordinaten für eine bestimmte Postleitzahl in einem bestimmten Koordinatensystem zurück
+"""
 
 import os
 import re
